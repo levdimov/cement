@@ -6,6 +6,8 @@ namespace Common
 {
     public static class ConsoleWriter
     {
+        private static readonly object ConsoleSync = new object();
+
         private static readonly ConsoleColor DefaultColor = Console.ForegroundColor;
         private static readonly int ConsoleWindowWidth = CalculateWindowWidth();
 
@@ -120,7 +122,7 @@ namespace Common
 
         private static void PrintLnError(string text, ConsoleColor color, bool emptyLineAfter = false)
         {
-            lock (Helper.LockObject)
+            lock (ConsoleSync)
             {
                 Console.ForegroundColor = color;
                 if (!Console.IsErrorRedirected)
@@ -141,7 +143,7 @@ namespace Common
 
         private static void Print(string text, ConsoleColor color, bool saveProgress = true)
         {
-            lock (Helper.LockObject)
+            lock (ConsoleSync)
             {
                 Console.ForegroundColor = color;
                 ClearLine();
@@ -154,7 +156,7 @@ namespace Common
 
         public static void PrintLn(string text, ConsoleColor color)
         {
-            lock (Helper.LockObject)
+            lock (ConsoleSync)
             {
                 Console.ForegroundColor = color;
                 ClearLine();
@@ -166,7 +168,7 @@ namespace Common
 
         public static void SaveToProcessedModules(string text)
         {
-            lock (Helper.LockObject)
+            lock (ConsoleSync)
             {
                 var moduleName = text.Split(']').Last().Trim().Split(' ', '/').First();
                 ProcessedModules.Add(moduleName);
