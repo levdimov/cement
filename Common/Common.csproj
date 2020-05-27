@@ -10,7 +10,7 @@
     <PackageReference Include="Microsoft.Extensions.Configuration" Version="3.0.0" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="3.0.0" />
     <PackageReference Include="Microsoft.Extensions.Logging" Version="3.0.0" />
-    <PackageReference Include="NDesk.Options" Version="0.2.1" />
+    <PackageReference Include="NDesk.Options.Core" Version="1.2.5" />
     <PackageReference Include="SharpYaml" Version="1.6.5" />
     <PackageReference Include="System.IO.Compression.ZipFile" Version="4.3.0" />
     <PackageReference Include="System.Management" Version="4.7.0" />
