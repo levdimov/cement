@@ -21,10 +21,6 @@
     <PackageReference Include="SharpYaml" Version="1.6.5" />
   </ItemGroup>
   <ItemGroup>
-    <Reference Include="Microsoft.CSharp" />
-    <Reference Include="mscorlib" />
-  </ItemGroup>
-  <ItemGroup>
     <Compile Update="Properties\ParsersTestData.Designer.cs">
       <DesignTime>True</DesignTime>
       <AutoGen>True</AutoGen>
