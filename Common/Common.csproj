@@ -4,8 +4,10 @@
     <Product>Common</Product>
     <Copyright>Copyright © 2019</Copyright>
     <OutputPath>bin\$(Configuration)\</OutputPath>
+    <LangVersion>8</LangVersion>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="CliWrap" Version="3.0.2" />
     <PackageReference Include="JetBrains.Annotations" Version="2019.1.1" />
     <PackageReference Include="Microsoft.Extensions.Configuration" Version="3.0.0" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="3.0.0" />

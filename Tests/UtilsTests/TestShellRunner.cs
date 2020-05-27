@@ -2,14 +2,13 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Linq;
 using System.Threading.Tasks;
 using Common;
 using NUnit.Framework;
 
 namespace Tests.UtilsTests
 {
-    [TestFixture]
+    [TestFixture, Category("ShellRunner")]
     public class TestShellRunner
     {
         private readonly ShellRunner runner = new ShellRunner();
@@ -83,23 +82,6 @@ namespace Tests.UtilsTests
             await Task.WhenAll(tasks);
             sw.Stop();
             Assert.That(sw.Elapsed.TotalSeconds < 10);
-        }
-
-        [Test]
-        public void TestShellRunnerOverflow()
-        {
-            var count = 10000;
-            var bat = "test_overflow.bat";
-            File.WriteAllText(bat, @"
-@echo off
-FOR /L %%G IN (1,1," + count + @") DO echo %%G");
-
-            runner.Run(bat);
-
-            var lines = runner.Output.Split('\n').ToList();
-            if (lines.Last() == "")
-                lines = lines.Take(lines.Count() - 1).ToList();
-            CollectionAssert.AreEqual(Enumerable.Range(1, count).Select(i => i.ToString()), lines);
         }
     }
 }

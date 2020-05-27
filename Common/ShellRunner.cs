@@ -1,11 +1,9 @@
 using System;
-using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
-using System.Management;
-using System.Security;
 using System.Text;
 using System.Threading;
+using CliWrap;
+using CliWrap.Exceptions;
 using Common.Logging;
 using Microsoft.Extensions.Logging;
 
@@ -15,93 +13,47 @@ namespace Common
     {
         private static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(10);
         public static string LastOutput;
-        public string Output { get; private set; }
-        public string Errors { get; private set; }
+
+        private readonly StringBuilder processOutput = new StringBuilder();
+        public string Output => processOutput.ToString();
+
+        private readonly StringBuilder processErrors = new StringBuilder();
+        public string Errors => processErrors.ToString();
+
         public bool HasTimeout;
 
-        private readonly ProcessStartInfo startInfo;
         private readonly ILogger log;
 
         public ShellRunner(ILogger log = null)
         {
-            if (log == null)
-                log = LogManager.GetLogger(typeof(ModuleGetter));
+            log ??= LogManager.GetLogger(typeof(ModuleGetter));
 
             this.log = log;
-            startInfo = new ProcessStartInfo
-            {
-                FileName = Helper.OsIsUnix() ? "/bin/bash" : "cmd",
-                CreateNoWindow = true,
-                RedirectStandardError = true,
-                RedirectStandardInput = true,
-                RedirectStandardOutput = true,
-                WindowStyle = ProcessWindowStyle.Hidden,
-                UseShellExecute = false
-            };
-            AddUserPassword();
-        }
-
-        private void AddUserPassword()
-        {
-            var settings = CementSettings.Get();
-            if (settings.UserName == null || settings.EncryptedPassword == null)
-                return;
-
-            startInfo.Domain = settings.Domain ?? Environment.MachineName;
-            startInfo.UserName = settings.UserName;
-            var decryptedPassword = Helper.Decrypt(settings.EncryptedPassword);
-
-            var password = new SecureString();
-            foreach (var c in decryptedPassword)
-                password.AppendChar(c);
-            startInfo.Password = password;
         }
 
         private void BeforeRun()
         {
-            startInfo.Arguments = Helper.OsIsUnix() ? " -lc " : " /D /C ";
-            Output = "";
-            Errors = "";
+            processOutput.Clear();
+            processErrors.Clear();
             HasTimeout = false;
         }
 
-        public delegate void ReadLineEvent(string content);
-
-        public event ReadLineEvent OnOutputChange, OnErrorsChange;
-
-        private string ReadStream(StreamReader output, ReadLineEvent evt)
-        {
-            var result = new StringBuilder();
-            while (!output.EndOfStream)
-            {
-                var line = output.ReadLine();
-                evt?.Invoke(line);
-                result.Append(line + "\n");
-            }
-            return result.ToString();
-        }
-
-        private void ReadCmdOutput(Process pr)
-        {
-            Output = ReadStream(pr.StandardOutput, OnOutputChange);
-        }
-
-        private void ReadCmdError(Process pr)
-        {
-            Errors = ReadStream(pr.StandardError, OnErrorsChange);
-        }
+        public Action<string> OnOutputChange = _ => {};
+        public Action<string> OnErrorsChange = _ => {};
 
         private int RunThreeTimes(string commandWithArguments, string workingDirectory, TimeSpan timeout, RetryStrategy retryStrategy = RetryStrategy.IfTimeout)
         {
-            int exitCode = RunOnce(commandWithArguments, workingDirectory, timeout);
-            int times = 2;
+            var exitCode = RunOnce(commandWithArguments, workingDirectory, timeout);
+            var times = 2;
 
             while (times-- > 0 && NeedRunAgain(retryStrategy, exitCode))
             {
                 if (HasTimeout)
+                {
                     timeout = TimeoutHelper.IncreaseTimeout(timeout);
+                }
                 exitCode = RunOnce(commandWithArguments, workingDirectory, timeout);
-                log.LogDebug($"EXECUTED {startInfo.FileName} {startInfo.Arguments} in {workingDirectory} with exitCode {exitCode} and retryStrategy {retryStrategy}");
+                log.LogDebug($"EXECUTED {commandWithArguments} in {workingDirectory} with exitCode {exitCode} and retryStrategy {retryStrategy}");
             }
             return exitCode;
         }
@@ -117,87 +69,77 @@ namespace Common
 
         public int RunOnce(string commandWithArguments, string workingDirectory, TimeSpan timeout)
         {
+            using var cancellationTokenSource = new CancellationTokenSource();
+            cancellationTokenSource.CancelAfter(timeout);
+
+            string BuildArguments(string command)
+            {
+                var shellArgs = Helper.OsIsUnix() ? " -lc " : " /D /C ";
+                return $"{shellArgs} \"{command}\"";
+            }
+
+            var cli = Cli
+                .Wrap(Helper.OsIsUnix() ? "/bin/bash" : "cmd")
+                .WithArguments(BuildArguments(commandWithArguments))
+                .WithStandardOutputPipe(
+                    PipeTarget.Merge(
+                        PipeTarget.ToStringBuilder(processOutput),
+                        PipeTarget.ToDelegate(OnOutputChange)
+                    )
+                )
+                .WithStandardErrorPipe(
+                    PipeTarget.Merge(
+                        PipeTarget.ToStringBuilder(processErrors),
+                        PipeTarget.ToDelegate(OnErrorsChange)
+                    )
+                )
+                .WithWorkingDirectory(workingDirectory);
+
             BeforeRun();
-            startInfo.Arguments = startInfo.Arguments + "\"" + commandWithArguments + "\"";
-            startInfo.WorkingDirectory = workingDirectory;
-
-            var sw = Stopwatch.StartNew();
-            using (var process = Process.Start(startInfo))
-            {
-                try
-                {
-                    var threadOutput = new Thread(() => ReadCmdOutput(process));
-                    var threadErrors = new Thread(() => ReadCmdError(process));
-                    threadOutput.Start();
-                    threadErrors.Start();
-
-                    if (!threadOutput.Join(timeout) || !threadErrors.Join(timeout) || !process.WaitForExit((int) timeout.TotalMilliseconds))
-                    {
-                        threadOutput.Abort();
-                        threadErrors.Abort();
-                        KillProcessAndChildren(process.Id, new HashSet<int>());
-                        HasTimeout = true;
-
-                        var message = string.Format("Running timeout at {2} for command {0} in {1}", commandWithArguments, workingDirectory, timeout);
-                        Errors += message;
-                        throw new TimeoutException(message);
-                    }
-
-                    LastOutput = Output;
-                    int exitCode = process.ExitCode;
-                    log.LogInformation($"EXECUTED {startInfo.FileName} {startInfo.Arguments} in {workingDirectory} in {sw.ElapsedMilliseconds}ms with exitCode {exitCode}");
-                    return exitCode;
-                }
-                catch (CementException e)
-                {
-                    if (e is TimeoutException)
-                    {
-                        if (!commandWithArguments.Equals("git ls-remote --heads"))
-                            ConsoleWriter.WriteWarning(e.Message);
-                        log?.LogWarning(e.Message);
-                    }
-                    else
-                    {
-                        ConsoleWriter.WriteError(e.Message);
-                        log?.LogError(e.Message);
-                    }
-                    return -1;
-                }
-            }
-        }
-
-        private void KillProcessAndChildren(int pid, HashSet<int> killed)
-        {
-            if (killed.Contains(pid))
-                return;
-            killed.Add(pid);
-
-            var searcher = new ManagementObjectSearcher("Select * From Win32_Process Where ParentProcessID=" + pid);
-            var moc = searcher.Get();
-            foreach (var mo in moc)
-            {
-                int child = Convert.ToInt32(mo["ProcessID"]);
-                KillProcessAndChildren(child, killed);
-            }
 
             try
             {
-                var proc = Process.GetProcessById(pid);
-                if (!IsCementProcess(proc.ProcessName))
-                    return;
+                CommandTask<CommandResult> commandTask;
+                CommandResult commandResult;
+                try
+                {
+                    commandTask = cli.ExecuteAsync(cancellationTokenSource.Token);
+                    commandResult = commandTask.GetAwaiter().GetResult();
 
-                log?.LogDebug("kill " + proc.ProcessName + "#" + proc.Id);
-                proc.Kill();
+                    LastOutput = Output;
+                    var exitCode = commandResult.ExitCode;
+                    log.LogInformation($"EXECUTED {commandWithArguments} in {workingDirectory} in {commandResult.RunTime.TotalMilliseconds}ms with exitCode {exitCode}");
+
+                    return exitCode;
+                }
+                catch (CommandExecutionException)
+                {
+                    return 1;
+                }
+                catch (OperationCanceledException)
+                {
+                    HasTimeout = true;
+                    var message = string.Format("Running timeout at {2} for command {0} in {1}", commandWithArguments, workingDirectory, timeout);
+                    processErrors.AppendLine(message);
+
+                    throw new TimeoutException(message);
+                }
             }
-            catch (Exception exception)
+            catch (CementException e)
             {
-                log?.LogDebug("killing already exited process #" + pid, exception);
+                if (e is TimeoutException)
+                {
+                    if (!commandWithArguments.Equals("git ls-remote --heads"))
+                        ConsoleWriter.WriteWarning(e.Message);
+                    log?.LogWarning(e.Message);
+                }
+                else
+                {
+                    ConsoleWriter.WriteError(e.Message);
+                    log?.LogError(e.Message);
+                }
+                return -1;
             }
-        }
-
-        private static bool IsCementProcess(string process)
-        {
-            return process == "cmd" || process.StartsWith("ssh") || process.StartsWith("git");
         }
 
         public int Run(string commandWithArguments)
