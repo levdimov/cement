@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Threading.Tasks;
+using Commands;
 using Common;
 using NUnit.Framework;
 
@@ -63,7 +64,7 @@ namespace Tests.UtilsTests
         public void TimeoutTest()
         {
             var sw = Stopwatch.StartNew();
-            runner.Run("ping 127.0.0.1 -n 3 > nul", TimeSpan.FromSeconds(1));
+            runner.Run(BuildPingCommand(3), TimeSpan.FromSeconds(1));
             sw.Stop();
             Assert.That(sw.Elapsed.TotalSeconds > 2.5);
             Assert.That(sw.Elapsed.TotalSeconds < 4.5);
@@ -77,11 +78,19 @@ namespace Tests.UtilsTests
             var tasks = new List<Task>();
             for (int i = 0; i < 10; i++)
             {
-                tasks.Add(Task.Run(() => new ShellRunner().Run("ping 127.0.0.1 -n 2 > nul", TimeSpan.FromSeconds(1))));
+                tasks.Add(Task.Run(() => new ShellRunner().Run(BuildPingCommand(2), TimeSpan.FromSeconds(1))));
             }
             await Task.WhenAll(tasks);
             sw.Stop();
             Assert.That(sw.Elapsed.TotalSeconds < 10);
+        }
+
+        private string BuildPingCommand(int count)
+        {
+            var flag = Helper.OsIsUnix() ? "-c" : "-n";
+            var nul = Helper.OsIsUnix() ? "/dev/null" : "nul";
+
+            return $"ping 127.0.0.1 {flag} {count.ToString()} > {nul}";
         }
     }
 }
